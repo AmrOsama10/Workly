@@ -1,0 +1,47 @@
+
+import { Injectable, CanActivate, ExecutionContext, UnauthorizedException, NotFoundException } from '@nestjs/common';
+import { Observable } from 'rxjs';
+import { JwtService } from '@nestjs/jwt';
+import { ConfigService } from '@nestjs/config';
+import { UserRepository } from '@models/index';
+import { Public } from '@common/decorator';
+import { Reflector } from '@nestjs/core';
+
+@Injectable()
+export class AuthGuard implements CanActivate {
+    constructor(
+        private readonly jwtService: JwtService,
+        private readonly configService: ConfigService,
+        private readonly userRepository: UserRepository,
+        private readonly reflector: Reflector
+    ) { }
+    async canActivate(
+        context: ExecutionContext,
+    ): Promise<boolean> {
+        try {
+            const request = context.switchToHttp().getRequest();
+            const { authorization } = request.headers
+            const publicValue = this.reflector.get(Public, context.getHandler())
+            if (publicValue) {
+                return true
+            }
+            const payload = await this.jwtService.verifyAsync<{ id: string, email: string, role: string, iat: number }>(authorization, {
+                secret: this.configService.get('jwt').secretKey,
+            })
+
+            const userExist = await this.userRepository.getOne({ _id: payload.id })
+            if (!userExist) {
+                throw new NotFoundException('User not found')
+            }
+
+            if (userExist.credentionalUpdatedAt > new Date(payload.iat * 1000)) {
+                throw new UnauthorizedException('token expired')
+            }
+
+            request.user = userExist
+            return true
+        } catch (error) {
+            throw new UnauthorizedException(error.message)
+        }
+    }
+}
